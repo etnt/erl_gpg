@@ -1,0 +1,11 @@
+{application, erl_gpg, [
+    {description,
+        "Erlang GPG library for encryption, decryption, and key management"},
+    {vsn, "0.1.0"},
+    {modules, [erl_gpg_api, erl_gpg_app, erl_gpg_sup, erl_gpg_worker]},
+    {registered, [erl_gpg_sup]},
+    {applications, [kernel, stdlib]},
+    {mod, {erl_gpg_app, []}},
+    {env, []},
+    {licenses, ["MPL-2.0"]}
+]}.
