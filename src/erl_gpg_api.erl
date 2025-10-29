@@ -29,7 +29,9 @@
     verify/2, verify/3,
     verify_detached/3, verify_detached/4,
     list_keys/0, list_keys/1, list_keys/2,
-    format_keys/1
+    format_keys/1,
+    compute_fingerprint/1, compute_fingerprint/2,
+    get_key_info/1, get_key_info/2
 ]).
 
 %% Exported for testing
@@ -475,6 +477,107 @@ format_keys(Result) ->
     KeysFormatted = format_key_records(ReversedData, []),
     [Header, KeysFormatted].
 
+%%% @doc Compute fingerprint from a public key.
+%%%
+%%% Imports the key temporarily and extracts its fingerprint. This is useful
+%%% for verifying key identity without needing to parse the key format manually.
+%%%
+%%% == Example ==
+%%%
+%%% ```
+%%% PublicKey = <<"-----BEGIN PGP PUBLIC KEY BLOCK-----\n...">>,
+%%% {ok, Fingerprint} = erl_gpg_api:compute_fingerprint(PublicKey),
+%%% %% Fingerprint is a binary like <<"1234567890ABCDEF1234567890ABCDEF12345678">>
+%%% '''
+%%%
+%%% @param KeyData The PGP public key (binary, ASCII-armored format)
+%%% @returns `{ok, Fingerprint}' where Fingerprint is a 40-character hex binary,
+%%%          or `{error, Reason}' on failure
+%%% @end
+-spec compute_fingerprint(binary()) -> {ok, binary()} | {error, term()}.
+compute_fingerprint(KeyData) ->
+    compute_fingerprint(KeyData, "").
+
+%%% @doc Compute fingerprint from a public key with GPG home directory.
+%%%
+%%% @param KeyData The PGP public key (binary, ASCII-armored format)
+%%% @param GnupgDir GPG home directory (currently not implemented, pass empty string)
+%%% @returns `{ok, Fingerprint}' where Fingerprint is a 40-character hex binary
+%%% @see compute_fingerprint/1
+%%% @end
+-spec compute_fingerprint(binary(), string()) -> {ok, binary()} | {error, term()}.
+compute_fingerprint(KeyData, GnupgDir) when is_binary(KeyData) ->
+    %% Import the key (GPG handles duplicates gracefully)
+    case import_key(KeyData, GnupgDir) of
+        {ok, _ImportResult} ->
+            %% List keys to get the fingerprint
+            case list_keys(GnupgDir, [{key_type, public}]) of
+                {ok, Result} ->
+                    %% Parse colon data to extract fingerprint
+                    ColonData = maps:get(colon, Result, []),
+                    case extract_fingerprint_from_colon(lists:reverse(ColonData)) of
+                        {ok, FP} -> {ok, FP};
+                        error -> {error, fingerprint_not_found}
+                    end;
+                {error, E} -> {error, E}
+            end;
+        {error, E} -> {error, {import_failed, E}}
+    end.
+
+%%% @doc Get comprehensive key information from a public key block.
+%%%
+%%% Imports the key and extracts useful metadata including fingerprint,
+%%% key ID, creation date, and user IDs.
+%%%
+%%% == Example ==
+%%%
+%%% ```
+%%% PublicKey = <<"-----BEGIN PGP PUBLIC KEY BLOCK-----\n...">>,
+%%% {ok, KeyInfo} = erl_gpg_api:get_key_info(PublicKey),
+%%% Fingerprint = maps:get(fingerprint, KeyInfo),
+%%% KeyID = maps:get(key_id, KeyInfo),
+%%% UserIDs = maps:get(user_ids, KeyInfo).
+%%% '''
+%%%
+%%% @param KeyData The PGP public key (binary, ASCII-armored format)
+%%% @returns `{ok, KeyInfo}' where KeyInfo is a map with keys:
+%%%          - `fingerprint' - 40-char hex binary
+%%%          - `key_id' - Short key ID binary
+%%%          - `algorithm' - Key algorithm binary (e.g., <<"rsa4096">>)
+%%%          - `creation_date' - Unix timestamp (integer)
+%%%          - `user_ids' - List of user ID binaries
+%%%          or `{error, Reason}' on failure
+%%% @end
+-spec get_key_info(binary()) -> {ok, map()} | {error, term()}.
+get_key_info(KeyData) ->
+    get_key_info(KeyData, "").
+
+%%% @doc Get key information with GPG home directory.
+%%%
+%%% @param KeyData The PGP public key (binary, ASCII-armored format)
+%%% @param GnupgDir GPG home directory (currently not implemented, pass empty string)
+%%% @returns `{ok, KeyInfo}' map with key metadata
+%%% @see get_key_info/1
+%%% @end
+-spec get_key_info(binary(), string()) -> {ok, map()} | {error, term()}.
+get_key_info(KeyData, GnupgDir) when is_binary(KeyData) ->
+    %% Import the key
+    case import_key(KeyData, GnupgDir) of
+        {ok, _ImportResult} ->
+            %% List keys to get detailed information
+            case list_keys(GnupgDir, [{key_type, public}]) of
+                {ok, Result} ->
+                    %% Parse colon data to extract key info
+                    ColonData = maps:get(colon, Result, []),
+                    case parse_key_info_from_colon(lists:reverse(ColonData)) of
+                        {ok, KeyInfo} -> {ok, KeyInfo};
+                        error -> {error, key_info_not_found}
+                    end;
+                {error, E} -> {error, E}
+            end;
+        {error, E} -> {error, {import_failed, E}}
+    end.
+
 %%% @private
 %%% @doc Format individual key records from colon-separated data.
 %%%
@@ -754,3 +857,92 @@ format_capabilities(Caps) when is_list(Caps) ->
     string:join(CapList, ", ");
 format_capabilities(_) ->
     "".
+
+%%% @private
+%%% @doc Extract fingerprint from colon-formatted GPG output.
+%%%
+%%% Searches for the first 'fpr' (fingerprint) record and returns the fingerprint.
+%%% The fingerprint is in field 10 (index 9 in 0-based indexing, field 10 in 1-based).
+%%%
+%%% @param ColonData List of parsed colon records (already reversed)
+%%% @returns {ok, Fingerprint} or error
+%%% @end
+extract_fingerprint_from_colon([]) ->
+    error;
+extract_fingerprint_from_colon([#{type := <<"fpr">>, fields := Fields} | _]) ->
+    %% Fingerprint is in field 10 (lists are 1-indexed in Erlang)
+    case length(Fields) >= 10 of
+        true ->
+            case lists:nth(10, Fields) of
+                <<>> -> error;
+                FP -> {ok, FP}
+            end;
+        false ->
+            error
+    end;
+extract_fingerprint_from_colon([_ | Rest]) ->
+    extract_fingerprint_from_colon(Rest).
+
+%%% @private
+%%% @doc Parse comprehensive key information from colon-formatted GPG output.
+%%%
+%%% Extracts fingerprint, key ID, algorithm, creation date, and user IDs from
+%%% the colon-formatted output of `gpg --list-keys --with-colons`.
+%%%
+%%% @param ColonData List of parsed colon records (already reversed)
+%%% @returns {ok, KeyInfo} map or error
+%%% @end
+parse_key_info_from_colon(ColonData) ->
+    parse_key_info_from_colon(ColonData, #{
+        fingerprint => undefined,
+        key_id => undefined,
+        algorithm => undefined,
+        creation_date => undefined,
+        user_ids => []
+    }).
+
+parse_key_info_from_colon([], Acc) ->
+    case maps:get(fingerprint, Acc) of
+        undefined -> error;
+        _ -> {ok, Acc}
+    end;
+parse_key_info_from_colon([#{type := <<"pub">>, fields := Fields} | Rest], Acc) ->
+    %% pub record: fields are [type, validity, key_length, algo, key_id, creation, expiry, ...]
+    %% Field indices (1-based): 3=key_length, 4=algo, 5=key_id, 6=creation
+    KeyID = safe_nth(5, Fields, <<>>),
+    Algo = safe_nth(4, Fields, <<>>),
+    KeyLen = safe_nth(3, Fields, <<>>),
+    Algorithm = <<Algo/binary, KeyLen/binary>>,
+    CreationStr = safe_nth(6, Fields, <<"0">>),
+    CreationDate =
+        try
+            binary_to_integer(CreationStr)
+        catch
+            _:_ -> 0
+        end,
+    parse_key_info_from_colon(Rest, Acc#{
+        key_id => KeyID,
+        algorithm => Algorithm,
+        creation_date => CreationDate
+    });
+parse_key_info_from_colon([#{type := <<"fpr">>, fields := Fields} | Rest], Acc) ->
+    %% fpr record: fingerprint is in field 10
+    FP = safe_nth(10, Fields, <<>>),
+    parse_key_info_from_colon(Rest, Acc#{fingerprint => FP});
+parse_key_info_from_colon([#{type := <<"uid">>, fields := Fields} | Rest], Acc) ->
+    %% uid record: user ID is in field 10
+    UID = safe_nth(10, Fields, <<>>),
+    UserIDs = maps:get(user_ids, Acc, []),
+    parse_key_info_from_colon(Rest, Acc#{user_ids => [UID | UserIDs]});
+parse_key_info_from_colon([_ | Rest], Acc) ->
+    parse_key_info_from_colon(Rest, Acc).
+
+%%% @private
+%%% @doc Safely get the Nth element from a list, returning a default if out of bounds.
+%%% @end
+safe_nth(N, List, Default) when is_integer(N), is_list(List) ->
+    case N > 0 andalso N =< length(List) of
+        true -> lists:nth(N, List);
+        false -> Default
+    end.
+
