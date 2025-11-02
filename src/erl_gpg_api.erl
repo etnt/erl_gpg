@@ -505,23 +505,25 @@ compute_fingerprint(KeyData) ->
 %%% @returns `{ok, Fingerprint}' where Fingerprint is a 40-character hex binary
 %%% @see compute_fingerprint/1
 %%% @end
--spec compute_fingerprint(binary(), string()) -> {ok, binary()} | {error, term()}.
-compute_fingerprint(KeyData, GnupgDir) when is_binary(KeyData) ->
-    %% Import the key (GPG handles duplicates gracefully)
-    case import_key(KeyData, GnupgDir) of
-        {ok, _ImportResult} ->
-            %% List keys to get the fingerprint
-            case list_keys(GnupgDir, [{key_type, public}]) of
-                {ok, Result} ->
-                    %% Parse colon data to extract fingerprint
-                    ColonData = maps:get(colon, Result, []),
-                    case extract_fingerprint_from_colon(lists:reverse(ColonData)) of
-                        {ok, FP} -> {ok, FP};
-                        error -> {error, fingerprint_not_found}
-                    end;
-                {error, E} -> {error, E}
+-spec compute_fingerprint(binary(), string()) ->
+    {ok, binary()} | {error, term()}.
+compute_fingerprint(KeyData, _GnupgDir) when is_binary(KeyData) ->
+    %% Use show-only import to get fingerprint without actually importing
+    %% This avoids interference with keys already in the keyring
+    Options = [{import_options, "show-only"}],
+    start_worker(import, KeyData, Options),
+    receive
+        {ok, Result} ->
+            %% Parse colon data to extract fingerprint from the imported key
+            ColonData = maps:get(colon, Result, []),
+            case extract_fingerprint_from_colon(ColonData) of
+                {ok, FP} -> {ok, FP};
+                error -> {error, fingerprint_not_found}
             end;
-        {error, E} -> {error, {import_failed, E}}
+        {error, E} ->
+            {error, E}
+    after 20000 ->
+        {error, timeout}
     end.
 
 %%% @doc Get comprehensive key information from a public key block.
@@ -573,9 +575,11 @@ get_key_info(KeyData, GnupgDir) when is_binary(KeyData) ->
                         {ok, KeyInfo} -> {ok, KeyInfo};
                         error -> {error, key_info_not_found}
                     end;
-                {error, E} -> {error, E}
+                {error, E} ->
+                    {error, E}
             end;
-        {error, E} -> {error, {import_failed, E}}
+        {error, E} ->
+            {error, {import_failed, E}}
     end.
 
 %%% @private
@@ -870,10 +874,10 @@ format_capabilities(_) ->
 extract_fingerprint_from_colon([]) ->
     error;
 extract_fingerprint_from_colon([#{type := <<"fpr">>, fields := Fields} | _]) ->
-    %% Fingerprint is in field 10 (lists are 1-indexed in Erlang)
-    case length(Fields) >= 10 of
+    %% Fingerprint is in field 9 (lists are 1-indexed in Erlang)
+    case length(Fields) >= 9 of
         true ->
-            case lists:nth(10, Fields) of
+            case lists:nth(9, Fields) of
                 <<>> -> error;
                 FP -> {ok, FP}
             end;
@@ -945,4 +949,3 @@ safe_nth(N, List, Default) when is_integer(N), is_list(List) ->
         true -> lists:nth(N, List);
         false -> Default
     end.
-

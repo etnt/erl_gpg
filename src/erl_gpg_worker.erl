@@ -265,7 +265,16 @@ base_args(Extra, Opts) ->
             _ -> []
         end,
 
-    BaseArgs ++ HomeDirArgs ++ TrustArgs ++ Extra.
+    %% Add --import-options if import_options option is provided
+    ImportOptsArgs =
+        case proplists:get_value(import_options, Opts) of
+            Value when is_list(Value), Value =/= "" ->
+                ["--import-options", Value];
+            _ ->
+                []
+        end,
+
+    BaseArgs ++ HomeDirArgs ++ TrustArgs ++ ImportOptsArgs ++ Extra.
 
 %%% @private
 %%% @doc Build base GPG arguments without options (for backwards compatibility).
