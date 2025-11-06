@@ -934,8 +934,8 @@ parse_key_info_from_colon([#{type := <<"fpr">>, fields := Fields} | Rest], Acc) 
     FP = safe_nth(10, Fields, <<>>),
     parse_key_info_from_colon(Rest, Acc#{fingerprint => FP});
 parse_key_info_from_colon([#{type := <<"uid">>, fields := Fields} | Rest], Acc) ->
-    %% uid record: user ID is in field 10
-    UID = safe_nth(10, Fields, <<>>),
+    %% uid record: user ID is in field 9 (not 10 as documentation suggests)
+    UID = safe_nth(9, Fields, <<>>),
     UserIDs = maps:get(user_ids, Acc, []),
     parse_key_info_from_colon(Rest, Acc#{user_ids => [UID | UserIDs]});
 parse_key_info_from_colon([_ | Rest], Acc) ->
