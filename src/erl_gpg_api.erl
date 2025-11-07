@@ -562,24 +562,23 @@ get_key_info(KeyData) ->
 %%% @see get_key_info/1
 %%% @end
 -spec get_key_info(binary(), string()) -> {ok, map()} | {error, term()}.
-get_key_info(KeyData, GnupgDir) when is_binary(KeyData) ->
-    %% Import the key
-    case import_key(KeyData, GnupgDir) of
-        {ok, _ImportResult} ->
-            %% List keys to get detailed information
-            case list_keys(GnupgDir, [{key_type, public}]) of
-                {ok, Result} ->
-                    %% Parse colon data to extract key info
-                    ColonData = maps:get(colon, Result, []),
-                    case parse_key_info_from_colon(lists:reverse(ColonData)) of
-                        {ok, KeyInfo} -> {ok, KeyInfo};
-                        error -> {error, key_info_not_found}
-                    end;
-                {error, E} ->
-                    {error, E}
+get_key_info(KeyData, _GnupgDir) when is_binary(KeyData) ->
+    %% Use show-only import to parse the key without adding it to the keyring
+    %% This avoids interference with keys already in the keyring
+    Options = [{import_options, "show-only"}],
+    start_worker(import, KeyData, Options),
+    receive
+        {ok, Result} ->
+            %% Parse colon data to extract key info from the provided key only
+            ColonData = maps:get(colon, Result, []),
+            case parse_key_info_from_colon(lists:reverse(ColonData)) of
+                {ok, KeyInfo} -> {ok, KeyInfo};
+                error -> {error, key_info_not_found}
             end;
         {error, E} ->
-            {error, {import_failed, E}}
+            {error, E}
+    after 20000 ->
+        {error, timeout}
     end.
 
 %%% @private
