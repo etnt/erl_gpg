@@ -22,27 +22,15 @@
 %%% @end
 -module(erl_gpg_api).
 
--export([
-    encrypt/3, encrypt/4,
-    decrypt/2, decrypt/3,
-    import_key/2, import_key/3,
-    verify/2, verify/3,
-    verify_detached/3, verify_detached/4,
-    list_keys/0, list_keys/1, list_keys/2,
-    format_keys/1,
-    compute_fingerprint/1, compute_fingerprint/2,
-    get_key_info/1, get_key_info/2
-]).
-
+-export([encrypt/3, encrypt/4, decrypt/2, decrypt/3, import_key/2, import_key/3, verify/2,
+         verify/3, verify_detached/3, verify_detached/4, list_keys/0, list_keys/1, list_keys/2,
+         format_keys/1, compute_fingerprint/1, compute_fingerprint/2, get_key_info/1,
+         get_key_info/2]).
 %% Exported for testing
 -export([start_worker/3]).
 
 %%% @private
-%%% @doc Spawn a worker process to execute a GPG operation.
-%%%
-%%% This is an internal helper function that spawns a linked process
-%%% to handle GPG port communication. The worker sends results back
-%%% to the calling process.
+%%% @doc Start a worker process to execute a GPG operation.
 %%%
 %%% @param Operation The GPG operation to perform (encrypt, decrypt, import, verify, verify_detached)
 %%% @param Payload The data to process
@@ -50,10 +38,7 @@
 %%% @returns The PID of the spawned worker process
 %%% @end
 start_worker(Operation, Payload, Options) ->
-    Caller = self(),
-    spawn_link(fun() ->
-        erl_gpg_worker:run(Operation, Payload, Options, Caller)
-    end).
+    erl_gpg_worker:run( Operation, Payload, Options).
 
 %%% @doc Encrypt data for one or more recipients using public-key cryptography.
 %%%
@@ -116,16 +101,11 @@ encrypt(Plain, Recipients, GnupgDir) ->
 %%% @see encrypt/3
 %%% @end
 -spec encrypt(binary(), [string()], string(), proplists:proplist()) ->
-    {ok, map()} | {error, term()}.
-encrypt(Plain, Recipients, _GnupgDir, Options) when
-    is_binary(Plain), is_list(Recipients)
-->
-    start_worker(encrypt, Plain, {Recipients, Options}),
-    receive
-        {ok, Result} -> {ok, Result};
-        {error, E} -> {error, E}
-    after 20000 -> {error, timeout}
-    end.
+                 {ok, map()} | {error, term()}.
+encrypt(Plain, Recipients, _GnupgDir, Options)
+    when is_binary(Plain), is_list(Recipients) ->
+    start_worker(encrypt, Plain, {Recipients, Options}).
+
 
 %%% @doc Decrypt ciphertext using your private key.
 %%%
@@ -165,15 +145,10 @@ decrypt(Cipher, GnupgDir) ->
 %%% @returns `{ok, Result}' where Result is a map containing decrypted data
 %%% @see decrypt/2
 %%% @end
--spec decrypt(binary(), string(), proplists:proplist()) ->
-    {ok, map()} | {error, term()}.
+-spec decrypt(binary(), string(), proplists:proplist()) -> {ok, map()} | {error, term()}.
 decrypt(Cipher, _GnupgDir, Options) when is_binary(Cipher) ->
-    start_worker(decrypt, Cipher, Options),
-    receive
-        {ok, Result} -> {ok, Result};
-        {error, E} -> {error, E}
-    after 20000 -> {error, timeout}
-    end.
+    start_worker(decrypt, Cipher, Options).
+
 
 %%% @doc Import a public or private key into the GPG keyring.
 %%%
@@ -211,14 +186,9 @@ import_key(KeyData, GnupgDir) ->
 %%% @see import_key/2
 %%% @end
 -spec import_key(binary(), string(), proplists:proplist()) ->
-    {ok, map()} | {error, term()}.
+                    {ok, map()} | {error, term()}.
 import_key(KeyData, _GnupgDir, Options) when is_binary(KeyData) ->
-    start_worker(import, KeyData, Options),
-    receive
-        {ok, Result} -> {ok, Result};
-        {error, E} -> {error, E}
-    after 20000 -> {error, timeout}
-    end.
+    start_worker(import, KeyData, Options).
 
 %%% @doc Verify a clearsigned message.
 %%%
@@ -262,15 +232,10 @@ verify(Data, GnupgDir) ->
 %%% @returns `{ok, Result}' where Result contains verification status
 %%% @see verify/2
 %%% @end
--spec verify(binary(), string(), proplists:proplist()) ->
-    {ok, map()} | {error, term()}.
+-spec verify(binary(), string(), proplists:proplist()) -> {ok, map()} | {error, term()}.
 verify(Data, _GnupgDir, Options) when is_binary(Data) ->
-    start_worker(verify, Data, Options),
-    receive
-        {ok, Result} -> {ok, Result};
-        {error, E} -> {error, E}
-    after 20000 -> {error, timeout}
-    end.
+    start_worker(verify, Data, Options).
+
 
 %%% @doc Verify a detached signature against data.
 %%%
@@ -324,8 +289,7 @@ verify(Data, _GnupgDir, Options) when is_binary(Data) ->
 %%% @see verify/2
 %%% @see verify_detached/4
 %%% @end
--spec verify_detached(binary(), binary(), string()) ->
-    {ok, map()} | {error, term()}.
+-spec verify_detached(binary(), binary(), string()) -> {ok, map()} | {error, term()}.
 verify_detached(Data, Signature, GnupgDir) ->
     verify_detached(Data, Signature, GnupgDir, []).
 
@@ -341,16 +305,11 @@ verify_detached(Data, Signature, GnupgDir) ->
 %%% @see verify_detached/3
 %%% @end
 -spec verify_detached(binary(), binary(), string(), proplists:proplist()) ->
-    {ok, map()} | {error, term()}.
-verify_detached(Data, Signature, _GnupgDir, Options) when
-    is_binary(Data), is_binary(Signature)
-->
-    start_worker(verify_detached, {Data, Signature}, Options),
-    receive
-        {ok, Result} -> {ok, Result};
-        {error, E} -> {error, E}
-    after 20000 -> {error, timeout}
-    end.
+                         {ok, map()} | {error, term()}.
+verify_detached(Data, Signature, _GnupgDir, Options)
+    when is_binary(Data), is_binary(Signature) ->
+    start_worker(verify_detached,{Data, Signature},Options).
+
 
 %%% @doc List all public keys in the keyring.
 %%%
@@ -414,15 +373,9 @@ list_keys(Options) when is_list(Options) ->
 %%% @see list_keys/0
 %%% @see list_keys/1
 %%% @end
--spec list_keys(string(), proplists:proplist()) ->
-    {ok, map()} | {error, term()}.
+-spec list_keys(string(), proplists:proplist()) -> {ok, map()} | {error, term()}.
 list_keys(_GnupgDir, Options) ->
-    start_worker(list_keys, <<>>, Options),
-    receive
-        {ok, Result} -> {ok, Result};
-        {error, E} -> {error, E}
-    after 20000 -> {error, timeout}
-    end.
+    start_worker(list_keys, <<>>, Options).
 
 %%% @doc Format key list data into a human-readable string.
 %%%
@@ -465,15 +418,16 @@ format_keys(Result) ->
             ok ->
                 %% Check if this looks like secret keys based on first record (after reversal)
                 case ReversedData of
-                    [#{type := <<"sec">>} | _] -> "Secret";
-                    _ -> "Public"
+                    [#{type := <<"sec">>} | _] ->
+                        "Secret";
+                    _ ->
+                        "Public"
                 end;
             _ ->
                 "Public"
         end,
-    Header = io_lib:format("~s Keys:~n~s~n", [
-        KeyType, lists:duplicate(length(KeyType) + 6, $-)
-    ]),
+    Header =
+        io_lib:format("~s Keys:~n~s~n", [KeyType, lists:duplicate(length(KeyType) + 6, $-)]),
     KeysFormatted = format_key_records(ReversedData, []),
     [Header, KeysFormatted].
 
@@ -505,25 +459,24 @@ compute_fingerprint(KeyData) ->
 %%% @returns `{ok, Fingerprint}' where Fingerprint is a 40-character hex binary
 %%% @see compute_fingerprint/1
 %%% @end
--spec compute_fingerprint(binary(), string()) ->
-    {ok, binary()} | {error, term()}.
+-spec compute_fingerprint(binary(), string()) -> {ok, binary()} | {error, term()}.
 compute_fingerprint(KeyData, _GnupgDir) when is_binary(KeyData) ->
     %% Use show-only import to get fingerprint without actually importing
     %% This avoids interference with keys already in the keyring
     Options = [{import_options, "show-only"}],
-    start_worker(import, KeyData, Options),
-    receive
+    Res = start_worker(import, KeyData, Options),
+    case Res of
         {ok, Result} ->
             %% Parse colon data to extract fingerprint from the imported key
             ColonData = maps:get(colon, Result, []),
             case extract_fingerprint_from_colon(ColonData) of
-                {ok, FP} -> {ok, FP};
-                error -> {error, fingerprint_not_found}
+                {ok, FP} ->
+                    {ok, FP};
+                error ->
+                    {error, fingerprint_not_found}
             end;
         {error, E} ->
             {error, E}
-    after 20000 ->
-        {error, timeout}
     end.
 
 %%% @doc Get comprehensive key information from a public key block.
@@ -545,7 +498,7 @@ compute_fingerprint(KeyData, _GnupgDir) when is_binary(KeyData) ->
 %%% @returns `{ok, KeyInfo}' where KeyInfo is a map with keys:
 %%%          - `fingerprint' - 40-char hex binary
 %%%          - `key_id' - Short key ID binary
-%%%          - `algorithm' - Key algorithm binary (e.g., <<"rsa4096">>)
+%%%          - `algorithm' - Key algorithm binary (e.g., `<<"rsa4096">>'')
 %%%          - `creation_date' - Unix timestamp (integer)
 %%%          - `user_ids' - List of user ID binaries
 %%%          or `{error, Reason}' on failure
@@ -566,19 +519,19 @@ get_key_info(KeyData, _GnupgDir) when is_binary(KeyData) ->
     %% Use show-only import to parse the key without adding it to the keyring
     %% This avoids interference with keys already in the keyring
     Options = [{import_options, "show-only"}],
-    start_worker(import, KeyData, Options),
-    receive
+    Res = start_worker(import, KeyData, Options),
+    case Res of
         {ok, Result} ->
             %% Parse colon data to extract key info from the provided key only
             ColonData = maps:get(colon, Result, []),
             case parse_key_info_from_colon(lists:reverse(ColonData)) of
-                {ok, KeyInfo} -> {ok, KeyInfo};
-                error -> {error, key_info_not_found}
+                {ok, KeyInfo} ->
+                    {ok, KeyInfo};
+                error ->
+                    {error, key_info_not_found}
             end;
         {error, E} ->
             {error, E}
-    after 20000 ->
-        {error, timeout}
     end.
 
 %%% @private
@@ -595,14 +548,10 @@ format_key_records([], Acc) ->
     lists:reverse(Acc);
 format_key_records([Record | Rest], Acc) ->
     case Record of
-        #{type := Type, fields := Fields} when
-            Type =:= <<"pub">>; Type =:= <<"sec">>
-        ->
+        #{type := Type, fields := Fields} when Type =:= <<"pub">>; Type =:= <<"sec">> ->
             %% Public or secret key record
             %% Fields: [validity, key_length, algo, key_id, creation_date, expiry, ...]
-            {KeyInfo, UIDsAndMore, Remaining} = collect_key_info(
-                Type, Fields, Rest
-            ),
+            {KeyInfo, UIDsAndMore, Remaining} = collect_key_info(Type, Fields, Rest),
             FormattedKey = format_single_key(Type, KeyInfo, UIDsAndMore),
             format_key_records(Remaining, [FormattedKey, "\n" | Acc]);
         _ ->
@@ -628,20 +577,21 @@ collect_key_info(Type, Fields, Rest) ->
     %% Capabilities are typically at index 11 (12th field)
     Capabilities =
         case length(Fields) >= 11 of
-            true -> lists:nth(11, Fields);
-            false -> <<>>
+            true ->
+                lists:nth(11, Fields);
+            false ->
+                <<>>
         end,
 
-    KeyInfo = #{
-        type => Type,
-        validity => Validity,
-        key_length => KeyLength,
-        algo => Algo,
-        key_id => KeyID,
-        creation_date => CreationDate,
-        expiry_date => ExpiryDate,
-        capabilities => Capabilities
-    },
+    KeyInfo =
+        #{type => Type,
+          validity => Validity,
+          key_length => KeyLength,
+          algo => Algo,
+          key_id => KeyID,
+          creation_date => CreationDate,
+          expiry_date => ExpiryDate,
+          capabilities => Capabilities},
     %% Collect associated records (uid, fpr, sub) until next pub/sec
     {Associated, Remaining} = collect_associated(Rest, []),
     {KeyInfo, Associated, Remaining}.
@@ -665,15 +615,14 @@ collect_associated([Record = #{type := Type} | Rest], Acc) ->
 %%% @doc Format a single key with its associated UIDs and fingerprints.
 %%% @end
 format_single_key(Type, KeyInfo, Associated) ->
-    #{
-        key_length := KeyLen,
-        algo := Algo,
-        key_id := KeyID,
-        creation_date := CreationDate,
-        expiry_date := ExpiryDate,
-        validity := Validity,
-        capabilities := Capabilities
-    } = KeyInfo,
+    #{key_length := KeyLen,
+      algo := Algo,
+      key_id := KeyID,
+      creation_date := CreationDate,
+      expiry_date := ExpiryDate,
+      validity := Validity,
+      capabilities := Capabilities} =
+        KeyInfo,
 
     %% Format algorithm number to name
     AlgoName = format_algo(Algo),
@@ -684,8 +633,10 @@ format_single_key(Type, KeyInfo, Associated) ->
     %% Format expiry info
     ExpiryStr =
         case ExpiryDate of
-            <<>> -> "";
-            _ -> " [expires: " ++ format_date(ExpiryDate) ++ "]"
+            <<>> ->
+                "";
+            _ ->
+                " [expires: " ++ format_date(ExpiryDate) ++ "]"
         end,
 
     %% Format validity
@@ -694,24 +645,23 @@ format_single_key(Type, KeyInfo, Associated) ->
     %% Format capabilities
     CapStr =
         case Capabilities of
-            <<>> -> "";
-            _ -> " [" ++ format_capabilities(Capabilities) ++ "]"
+            <<>> ->
+                "";
+            _ ->
+                " [" ++ format_capabilities(Capabilities) ++ "]"
         end,
 
     %% Main key line
-    KeyLine = io_lib:format(
-        "~s  ~s~s/~s  ~s~s~s~s~n",
-        [
-            Type,
-            AlgoName,
-            KeyLen,
-            format_key_id(KeyID),
-            DateStr,
-            ExpiryStr,
-            ValidityStr,
-            CapStr
-        ]
-    ),
+    KeyLine =
+        io_lib:format("~s  ~s~s/~s  ~s~s~s~s~n",
+                      [Type,
+                       AlgoName,
+                       KeyLen,
+                       format_key_id(KeyID),
+                       DateStr,
+                       ExpiryStr,
+                       ValidityStr,
+                       CapStr]),
 
     %% Format associated UIDs and fingerprints
     UIDLines = format_associated(Associated),
@@ -722,62 +672,56 @@ format_single_key(Type, KeyInfo, Associated) ->
 %%% @doc Format associated records (UIDs, fingerprints, subkeys).
 %%% @end
 format_associated(Records) ->
-    lists:map(
-        fun(Record) ->
-            case Record of
-                #{type := <<"uid">>, fields := Fields} ->
-                    %% UID record - Fields: [validity, ..., ..., ..., ..., ..., ..., ..., ..., uid_string]
-                    %% The UID is at index 9 (10th field, 1-based)
-                    UID =
-                        case length(Fields) >= 9 of
-                            true -> lists:nth(9, Fields);
-                            false -> <<>>
-                        end,
-                    case UID of
-                        <<>> -> [];
-                        _ -> io_lib:format("     ~s~n", [UID])
-                    end;
-                #{type := <<"fpr">>, fields := Fields} ->
-                    %% Fingerprint - Fields: [..., ..., ..., ..., ..., ..., ..., ..., ..., fingerprint]
-                    %% The fingerprint is at index 9 (10th field, 1-based)
-                    FPR =
-                        case length(Fields) >= 9 of
-                            true -> lists:nth(9, Fields);
-                            false -> <<>>
-                        end,
-                    case FPR of
-                        <<>> ->
-                            [];
-                        _ ->
-                            io_lib:format("     Fingerprint: ~s~n", [
-                                format_fingerprint(FPR)
-                            ])
-                    end;
-                #{type := <<"sub">>, fields := Fields} ->
-                    %% Subkey - Fields: [validity, key_length, algo, key_id, ...]
-                    [_Validity, KeyLen, Algo, KeyID | _] =
-                        Fields ++ lists:duplicate(10, <<>>),
-                    AlgoName = format_algo(Algo),
-                    io_lib:format(
-                        "     sub  ~s~s/~s~n",
-                        [AlgoName, KeyLen, format_key_id(KeyID)]
-                    );
-                _ ->
-                    []
-            end
-        end,
-        Records
-    ).
+    lists:map(fun(Record) ->
+                 case Record of
+                     #{type := <<"uid">>, fields := Fields} ->
+                         %% UID record - Fields: [validity, ..., ..., ..., ..., ..., ..., ..., ..., uid_string]
+                         %% The UID is at index 9 (10th field, 1-based)
+                         UID = case length(Fields) >= 9 of
+                                   true -> lists:nth(9, Fields);
+                                   false -> <<>>
+                               end,
+                         case UID of
+                             <<>> -> [];
+                             _ -> io_lib:format("     ~s~n", [UID])
+                         end;
+                     #{type := <<"fpr">>, fields := Fields} ->
+                         %% Fingerprint - Fields: [..., ..., ..., ..., ..., ..., ..., ..., ..., fingerprint]
+                         %% The fingerprint is at index 9 (10th field, 1-based)
+                         FPR = case length(Fields) >= 9 of
+                                   true -> lists:nth(9, Fields);
+                                   false -> <<>>
+                               end,
+                         case FPR of
+                             <<>> -> [];
+                             _ -> io_lib:format("     Fingerprint: ~s~n", [format_fingerprint(FPR)])
+                         end;
+                     #{type := <<"sub">>, fields := Fields} ->
+                         %% Subkey - Fields: [validity, key_length, algo, key_id, ...]
+                         [_Validity, KeyLen, Algo, KeyID | _] = Fields ++ lists:duplicate(10, <<>>),
+                         AlgoName = format_algo(Algo),
+                         io_lib:format("     sub  ~s~s/~s~n",
+                                       [AlgoName, KeyLen, format_key_id(KeyID)]);
+                     _ -> []
+                 end
+              end,
+              Records).
 
 %%% @private
 %%% @doc Format algorithm number to readable name.
 %%% @end
-format_algo(<<"1">>) -> "rsa";
-format_algo(<<"17">>) -> "dsa";
-format_algo(<<"18">>) -> "ecdh";
-format_algo(<<"19">>) -> "ecdsa";
-format_algo(<<"22">>) -> "eddsa";
-format_algo(Other) -> binary_to_list(Other).
+format_algo(<<"1">>) ->
+    "rsa";
+format_algo(<<"17">>) ->
+    "dsa";
+format_algo(<<"18">>) ->
+    "ecdh";
+format_algo(<<"19">>) ->
+    "ecdsa";
+format_algo(<<"22">>) ->
+    "eddsa";
+format_algo(Other) ->
+    binary_to_list(Other).
 
 %%% @private
 %%% @doc Format key ID (take last 8 characters for short form).
@@ -809,13 +753,13 @@ format_date(<<>>) ->
 format_date(Timestamp) when is_binary(Timestamp) ->
     try
         Secs = binary_to_integer(Timestamp),
-        {{Y, M, D}, _} = calendar:gregorian_seconds_to_datetime(
-            %% Unix epoch offset
-            Secs + 62167219200
-        ),
+        {{Y, M, D}, _} =
+            calendar:gregorian_seconds_to_datetime(%% Unix epoch offset
+                                                   Secs + 62167219200),
         io_lib:format("~4..0w-~2..0w-~2..0w", [Y, M, D])
     catch
-        _:_ -> binary_to_list(Timestamp)
+        _:_ ->
+            binary_to_list(Timestamp)
     end;
 format_date(_) ->
     "".
@@ -823,16 +767,26 @@ format_date(_) ->
 %%% @private
 %%% @doc Format validity field to human-readable string.
 %%% @end
-format_validity(<<"u">>) -> " [ultimate]";
-format_validity(<<"f">>) -> " [full]";
-format_validity(<<"m">>) -> " [marginal]";
-format_validity(<<"n">>) -> " [never]";
-format_validity(<<"-">>) -> " [unknown]";
-format_validity(<<"q">>) -> " [undefined]";
-format_validity(<<"i">>) -> " [invalid]";
-format_validity(<<"r">>) -> " [revoked]";
-format_validity(<<"e">>) -> " [expired]";
-format_validity(_) -> "".
+format_validity(<<"u">>) ->
+    " [ultimate]";
+format_validity(<<"f">>) ->
+    " [full]";
+format_validity(<<"m">>) ->
+    " [marginal]";
+format_validity(<<"n">>) ->
+    " [never]";
+format_validity(<<"-">>) ->
+    " [unknown]";
+format_validity(<<"q">>) ->
+    " [undefined]";
+format_validity(<<"i">>) ->
+    " [invalid]";
+format_validity(<<"r">>) ->
+    " [revoked]";
+format_validity(<<"e">>) ->
+    " [expired]";
+format_validity(_) ->
+    "".
 
 %%% @private
 %%% @doc Format capabilities field to human-readable string.
@@ -841,22 +795,21 @@ format_validity(_) -> "".
 format_capabilities(Caps) when is_binary(Caps) ->
     format_capabilities(binary_to_list(Caps));
 format_capabilities(Caps) when is_list(Caps) ->
-    CapList = lists:filtermap(
-        fun(C) ->
-            case C of
-                $e -> {true, "encrypt"};
-                $s -> {true, "sign"};
-                $c -> {true, "certify"};
-                $a -> {true, "auth"};
-                $E -> {true, "group-encrypt"};
-                $S -> {true, "Sign"};
-                $C -> {true, "Certify"};
-                $A -> {true, "Auth"};
-                _ -> false
-            end
-        end,
-        Caps
-    ),
+    CapList =
+        lists:filtermap(fun(C) ->
+                           case C of
+                               $e -> {true, "encrypt"};
+                               $s -> {true, "sign"};
+                               $c -> {true, "certify"};
+                               $a -> {true, "auth"};
+                               $E -> {true, "group-encrypt"};
+                               $S -> {true, "Sign"};
+                               $C -> {true, "Certify"};
+                               $A -> {true, "Auth"};
+                               _ -> false
+                           end
+                        end,
+                        Caps),
     string:join(CapList, ", ");
 format_capabilities(_) ->
     "".
@@ -877,8 +830,10 @@ extract_fingerprint_from_colon([#{type := <<"fpr">>, fields := Fields} | _]) ->
     case length(Fields) >= 9 of
         true ->
             case lists:nth(9, Fields) of
-                <<>> -> error;
-                FP -> {ok, FP}
+                <<>> ->
+                    error;
+                FP ->
+                    {ok, FP}
             end;
         false ->
             error
@@ -890,24 +845,25 @@ extract_fingerprint_from_colon([_ | Rest]) ->
 %%% @doc Parse comprehensive key information from colon-formatted GPG output.
 %%%
 %%% Extracts fingerprint, key ID, algorithm, creation date, and user IDs from
-%%% the colon-formatted output of `gpg --list-keys --with-colons`.
+%%% the colon-formatted output of `gpg --list-keys --with-colons'.
 %%%
 %%% @param ColonData List of parsed colon records (already reversed)
 %%% @returns {ok, KeyInfo} map or error
 %%% @end
 parse_key_info_from_colon(ColonData) ->
-    parse_key_info_from_colon(ColonData, #{
-        fingerprint => undefined,
-        key_id => undefined,
-        algorithm => undefined,
-        creation_date => undefined,
-        user_ids => []
-    }).
+    parse_key_info_from_colon(ColonData,
+                              #{fingerprint => undefined,
+                                key_id => undefined,
+                                algorithm => undefined,
+                                creation_date => undefined,
+                                user_ids => []}).
 
 parse_key_info_from_colon([], Acc) ->
     case maps:get(fingerprint, Acc) of
-        undefined -> error;
-        _ -> {ok, Acc}
+        undefined ->
+            error;
+        _ ->
+            {ok, Acc}
     end;
 parse_key_info_from_colon([#{type := <<"pub">>, fields := Fields} | Rest], Acc) ->
     %% pub record: fields are [type, validity, key_length, algo, key_id, creation, expiry, ...]
@@ -921,13 +877,13 @@ parse_key_info_from_colon([#{type := <<"pub">>, fields := Fields} | Rest], Acc) 
         try
             binary_to_integer(CreationStr)
         catch
-            _:_ -> 0
+            _:_ ->
+                0
         end,
-    parse_key_info_from_colon(Rest, Acc#{
-        key_id => KeyID,
-        algorithm => Algorithm,
-        creation_date => CreationDate
-    });
+    parse_key_info_from_colon(Rest,
+                              Acc#{key_id => KeyID,
+                                   algorithm => Algorithm,
+                                   creation_date => CreationDate});
 parse_key_info_from_colon([#{type := <<"fpr">>, fields := Fields} | Rest], Acc) ->
     %% fpr record: fingerprint is in field 10
     FP = safe_nth(10, Fields, <<>>),
@@ -945,6 +901,8 @@ parse_key_info_from_colon([_ | Rest], Acc) ->
 %%% @end
 safe_nth(N, List, Default) when is_integer(N), is_list(List) ->
     case N > 0 andalso N =< length(List) of
-        true -> lists:nth(N, List);
-        false -> Default
+        true ->
+            lists:nth(N, List);
+        false ->
+            Default
     end.

@@ -27,8 +27,8 @@ rebar3 ex_doc
 
 ## Architecture
 
-- `erl_gpg_api` - Public API for GPG operations
-- `erl_gpg_worker` - Worker process that manages GPG port communication and output parsing
+- `erl_gpg_api` - Public synchronous API for GPG operations
+- `erl_gpg_worker` - Worker module that manages GPG port communication and output parsing
 - `erl_gpg_sup` - OTP supervisor
 - `erl_gpg_app` - OTP application behavior
 
@@ -530,7 +530,8 @@ The test suite includes:
 - **Data Validation**: 
   - Validate all input data before passing to GPG
   - Handle private keys securely and never log them
-  - Be aware of GPG's resource usage and set appropriate timeouts (default: 15 seconds)
+  - Be aware of GPG's resource usage and set appropriate timeouts
+  - Operations timeout after 5 seconds
 
 - **File Permissions**: 
   - Use appropriate permissions (0700) for GPG home directories

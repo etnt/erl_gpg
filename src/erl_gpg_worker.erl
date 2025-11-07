@@ -29,7 +29,7 @@
 %%% @end
 -module(erl_gpg_worker).
 
--export([run/4]).
+-export([run/3]).
 %% Exported for testing
 -export([
     split_gpg_output/1,
@@ -39,11 +39,26 @@
     parse_colon_lines/1,
     is_status_line/1,
     is_colon_line/1,
+    is_orphaned_status_tag/1,
     base_args/1,
     base_args/2
 ]).
 
--define(TIMEOUT, 15000).
+-define(TIMEOUT, 5000).
+
+%% Type definitions
+-type status_map() :: #{tag := binary(), args := [binary()]}.
+-type colon_map() :: #{type := binary(), fields := [binary()]}.
+-type exit_status() :: ok | {error, {exit_status, non_neg_integer()}}.
+-type result_map() :: #{
+    stdout := binary(),
+    status := [status_map()],
+    colon := [colon_map()],
+    raw := #{status_lines := [binary()], colon_lines := [binary()]},
+    exit := exit_status()
+}.
+
+-export_type([status_map/0, colon_map/0, exit_status/0, result_map/0]).
 
 %%% @doc Get the GPG binary path.
 %%%
@@ -145,30 +160,41 @@ find_first_existing([]) ->
 %%% @param Operation The operation to perform (atom)
 %%% @param Data The input data (binary or tuple for verify_detached)
 %%% @param Options Operation-specific options (e.g., recipient list)
-%%% @param Caller The PID to send results to
-%%% @returns `ok' after sending result message to caller
+%%% @returns Result map on success or error tuple
 %%% @end
--spec run(atom(), binary(), any(), pid()) -> ok.
-run(encrypt, Plain, {Recipients, Opts}, Caller) when
+-spec run(atom(), binary() | {binary(), binary()} | any(), any()) ->
+    {ok, result_map()} | {error, result_map() | timeout | unsupported_operation}.
+run(Operation, Data, Options) ->
+    Self = self(),
+    Pid = spawn(fun() -> do_run(Operation, Data, Options, Self) end),
+    receive
+        {Pid, Result} ->
+            Result
+    after 5000 ->
+            {error, timeout}
+    end.
+
+-spec do_run(atom(), binary(), any(), pid()) -> ok.
+do_run(encrypt, Plain, {Recipients, Opts}, Caller) when
     is_binary(Plain), is_list(Recipients), is_list(Opts)
 ->
     Args = base_args(recips_arg(Recipients), Opts) ++ ["--encrypt", "--armor"],
     run_port(Args, Plain, Caller);
-run(encrypt, Plain, Recipients, Caller) when
+do_run(encrypt, Plain, Recipients, Caller) when
     is_binary(Plain), is_list(Recipients)
 ->
     %% Backwards compatibility - treat as {Recipients, []}
-    run(encrypt, Plain, {Recipients, []}, Caller);
-run(decrypt, Cipher, Opts, Caller) when is_binary(Cipher), is_list(Opts) ->
+    do_run(encrypt, Plain, {Recipients, []}, Caller);
+do_run(decrypt, Cipher, Opts, Caller) when is_binary(Cipher), is_list(Opts) ->
     Args = base_args([], Opts) ++ ["--decrypt", "--armor"],
     run_port(Args, Cipher, Caller);
-run(import, KeyData, Opts, Caller) when is_binary(KeyData), is_list(Opts) ->
+do_run(import, KeyData, Opts, Caller) when is_binary(KeyData), is_list(Opts) ->
     Args = base_args([], Opts) ++ ["--import"],
     run_port(Args, KeyData, Caller);
-run(verify, Data, Opts, Caller) when is_binary(Data), is_list(Opts) ->
+do_run(verify, Data, Opts, Caller) when is_binary(Data), is_list(Opts) ->
     Args = base_args([], Opts) ++ ["--verify"],
     run_port(Args, Data, Caller);
-run(verify_detached, {Data, Signature}, Opts, Caller) when
+do_run(verify_detached, {Data, Signature}, Opts, Caller) when
     is_binary(Data), is_binary(Signature), is_list(Opts)
 ->
     %% Write signature to a temporary file since GPG needs file input for detached sigs
@@ -182,7 +208,7 @@ run(verify_detached, {Data, Signature}, Opts, Caller) when
     after
         file:delete(TempSig)
     end;
-run(list_keys, _NoData, Opts, Caller) when is_list(Opts) ->
+do_run(list_keys, _NoData, Opts, Caller) when is_list(Opts) ->
     %% List keys doesn't need input data, use empty binary
     KeyType = proplists:get_value(key_type, Opts, public),
     Args =
@@ -192,8 +218,8 @@ run(list_keys, _NoData, Opts, Caller) when is_list(Opts) ->
                 secret -> ["--list-secret-keys"]
             end,
     run_port(Args, <<>>, Caller);
-run(_, _, _, Caller) ->
-    Caller ! {error, unsupported_operation},
+do_run(_, _, _, Caller) ->
+    Caller ! {self(), {error, unsupported_operation}},
     ok.
 
 %% Run gpg with data sent via stdin
@@ -317,16 +343,16 @@ collect(Port, Caller, Acc) ->
         {Port, {exit_status, 0}} ->
             catch erlang:port_close(Port),
             Result = build_result(Acc, ok),
-            Caller ! {ok, Result},
+            Caller ! {self(), {ok, Result}},
             ok;
         {Port, {exit_status, Code}} ->
             catch erlang:port_close(Port),
             Result = build_result(Acc, {error, {exit_status, Code}}),
-            Caller ! {error, Result},
+            Caller ! {self(), {error, Result}},
             ok
     after ?TIMEOUT ->
         catch erlang:port_close(Port),
-        Caller ! {error, timeout},
+        Caller ! {self(), {error, timeout}},
         ok
     end.
 
@@ -409,11 +435,19 @@ classify(Line, {StdAcc, StatusAcc, ColonAcc}) ->
                                 true ->
                                     {StdAcc, StatusAcc, [Line | ColonAcc]};
                                 false ->
-                                    {
-                                        [Line, <<"\n">> | StdAcc],
-                                        StatusAcc,
-                                        ColonAcc
-                                    }
+                                    %% Check if line looks like an orphaned status tag
+                                    %% (all uppercase, might be from a split status line)
+                                    case is_orphaned_status_tag(Line) of
+                                        true ->
+                                            %% Skip orphaned status tags
+                                            {StdAcc, StatusAcc, ColonAcc};
+                                        false ->
+                                            {
+                                                [Line, <<"\n">> | StdAcc],
+                                                StatusAcc,
+                                                ColonAcc
+                                            }
+                                    end
                             end
                     end;
                 [BeforeFirst | StatusParts] ->
@@ -425,9 +459,22 @@ classify(Line, {StdAcc, StatusAcc, ColonAcc}) ->
                             _ -> [BeforeFirst | StdAcc]
                         end,
                     %% Each part in StatusParts becomes a status line
+                    %% Filter out parts that are empty or just whitespace after "]"
+                    ValidStatusParts = lists:filter(fun(Part) ->
+                        %% Check if part has content after "] "
+                        case Part of
+                            <<"]", Rest/binary>> ->
+                                % Trim whitespace and check if there's actual content
+                                Trimmed = string:trim(Rest, leading),
+                                byte_size(Trimmed) > 0;
+                            _ ->
+                                %% Part doesn't even start with "]", might be malformed
+                                byte_size(Part) > 2
+                        end
+                    end, StatusParts),
                     NewStatusLines = [
                         <<"[GNUPG:", Part/binary>>
-                     || Part <- StatusParts
+                     || Part <- ValidStatusParts
                     ],
                     {NewStdAcc, lists:reverse(NewStatusLines) ++ StatusAcc,
                         ColonAcc}
@@ -444,6 +491,34 @@ classify(Line, {StdAcc, StatusAcc, ColonAcc}) ->
 %%% @end
 is_status_line(<<"[GNUPG:", _/binary>>) -> true;
 is_status_line(_) -> false.
+
+%%% @doc Check if a line looks like an orphaned GPG status tag.
+%%%
+%%% Sometimes GPG splits status lines across newlines, leaving orphaned tags.
+%%% These are typically short words (uppercase letters, numbers, underscores).
+%%%
+%%% @param Line The line to check (binary)
+%%% @returns `true' if it looks like an orphaned status tag, `false' otherwise
+%%% @end
+is_orphaned_status_tag(Line) when byte_size(Line) < 30 ->
+    %% Check if it's an orphaned status tag fragment
+    %% Pattern 1: Single uppercase word (e.g., "GOODMDC", "PLAINTEXT_LENGTH")
+    %% Pattern 2: Numbers optionally prefixed by space (e.g., " 33554433")
+    %% Pattern 3: "gpg-exit" followed by numbers (e.g., " gpg-exit 33554433")
+    IsUppercaseWord = case re:run(Line, <<"^[A-Z][A-Z0-9_]*$">>) of
+        {match, _} -> true;
+        nomatch -> false
+    end,
+    IsNumbersWithSpace = case re:run(Line, <<"^ *[0-9]+$">>) of
+        {match, _} -> true;
+        nomatch -> false
+    end,
+    IsGpgExit = case re:run(Line, <<"^ *gpg-exit [0-9]+$">>) of
+        {match, _} -> true;
+        nomatch -> false
+    end,
+    IsUppercaseWord orelse IsNumbersWithSpace orelse IsGpgExit;
+is_orphaned_status_tag(_) -> false.
 
 %%% @doc Check if a line is a colon-separated record.
 %%%
