@@ -25,7 +25,7 @@
 -export([encrypt/3, encrypt/4, decrypt/2, decrypt/3, import_key/2, import_key/3, verify/2,
          verify/3, verify_detached/3, verify_detached/4, list_keys/0, list_keys/1, list_keys/2,
          format_keys/1, compute_fingerprint/1, compute_fingerprint/2, get_key_info/1,
-         get_key_info/2]).
+         get_key_info/2, sign/2, sign/3, sign_detached/3, sign_detached/4]).
 %% Exported for testing
 -export([start_worker/3]).
 
@@ -309,6 +309,148 @@ verify_detached(Data, Signature, GnupgDir) ->
 verify_detached(Data, Signature, _GnupgDir, Options)
     when is_binary(Data), is_binary(Signature) ->
     start_worker(verify_detached,{Data, Signature},Options).
+
+
+%%% @doc Sign data with a GPG private key (clearsign format).
+%%%
+%%% Creates a clearsigned message where the signature is embedded with the data.
+%%% The signing key must be present in the GPG keyring, and GPG agent will
+%%% handle passphrase prompting if the key is passphrase-protected.
+%%%
+%%% == Example ==
+%%%
+%%% ```
+%%% Data = <<"This is a message to sign">>,
+%%% SignerKeyID = "alice@example.com",  %% or fingerprint
+%%% {ok, Result} = erl_gpg_api:sign(Data, SignerKeyID),
+%%% SignedData = maps:get(stdout, Result).
+%%% %% SignedData contains:
+%%% %% -----BEGIN PGP SIGNED MESSAGE-----
+%%% %% Hash: SHA256
+%%% %%
+%%% %% This is a message to sign
+%%% %% -----BEGIN PGP SIGNATURE-----
+%%% %% ...
+%%% %% -----END PGP SIGNATURE-----
+%%% '''
+%%%
+%%% @param Data The data to sign (binary)
+%%% @param SignerKeyID Key identifier (email, key ID, or fingerprint)
+%%% @returns `{ok, Result}' where Result contains the clearsigned data in the
+%%%          `stdout' field, or `{error, Reason}' on failure
+%%% @see sign/3
+%%% @see sign_detached/3
+%%% @end
+-spec sign(binary(), string()) -> {ok, map()} | {error, term()}.
+sign(Data, SignerKeyID) ->
+    sign(Data, SignerKeyID, []).
+
+%%% @doc Sign data with additional options.
+%%%
+%%% Like sign/2 but accepts an options proplist.
+%%%
+%%% == Options ==
+%%%
+%%% <ul>
+%%%   <li>`{armor, true}' - ASCII-armored output (default)</li>
+%%%   <li>`{digest_algo, Algo}' - Hash algorithm (e.g., "SHA256", "SHA512")</li>
+%%%   <li>`{home_dir, Path}' - Use custom GPG home directory</li>
+%%% </ul>
+%%%
+%%% @param Data The data to sign (binary)
+%%% @param SignerKeyID Key identifier (email, key ID, or fingerprint)
+%%% @param Options Proplist of options
+%%% @returns `{ok, Result}' where Result contains clearsigned data
+%%% @see sign/2
+%%% @end
+-spec sign(binary(), string(), proplists:proplist()) -> {ok, map()} | {error, term()}.
+sign(Data, SignerKeyID, Options) when is_binary(Data), is_list(SignerKeyID) ->
+    start_worker(sign, Data, {SignerKeyID, Options}).
+
+%%% @doc Create a detached signature for data.
+%%%
+%%% Creates a detached GPG signature that is separate from the data being signed.
+%%% This is commonly used for signing files like CSRs (Certificate Signing Requests)
+%%% where the signature needs to be transmitted or stored separately.
+%%%
+%%% The signing key must be present in the GPG keyring. If the key is
+%%% passphrase-protected, GPG agent will prompt for the passphrase on first use
+%%% and cache it for subsequent operations (default: 10 minutes).
+%%%
+%%% == Example ==
+%%%
+%%% ```
+%%% %% Sign a Certificate Signing Request
+%%% CSRData = <<"-----BEGIN CERTIFICATE REQUEST-----\n...">>,
+%%% GpgFingerprint = "1234567890ABCDEF1234567890ABCDEF12345678",
+%%%
+%%% {ok, Result} = erl_gpg_api:sign_detached(CSRData, GpgFingerprint, ""),
+%%% Signature = maps:get(stdout, Result),
+%%% %% Signature contains:
+%%% %% -----BEGIN PGP SIGNATURE-----
+%%% %% ...
+%%% %% -----END PGP SIGNATURE-----
+%%%
+%%% %% Later verify the signature
+%%% {ok, VerifyResult} = erl_gpg_api:verify_detached(CSRData, Signature, "").
+%%% '''
+%%%
+%%% == Use Cases ==
+%%%
+%%% <ul>
+%%%   <li>Sign CSRs for certificate renewal</li>
+%%%   <li>Sign documents where signature is stored separately</li>
+%%%   <li>Create detachable proof of authenticity</li>
+%%%   <li>Sign binary files without modifying them</li>
+%%% </ul>
+%%%
+%%% @param Data The data to sign (binary)
+%%% @param SignerKeyID Key identifier (email, key ID, or full fingerprint)
+%%% @param GnupgDir GPG home directory (currently not implemented, pass empty string)
+%%% @returns `{ok, Result}' where Result contains the detached signature in the
+%%%          `stdout' field (ASCII-armored PGP signature block),
+%%%          or `{error, Reason}' on failure
+%%% @see sign_detached/4
+%%% @see verify_detached/3
+%%% @see sign/2
+%%% @end
+-spec sign_detached(binary(), string(), string()) -> {ok, map()} | {error, term()}.
+sign_detached(Data, SignerKeyID, GnupgDir) ->
+    sign_detached(Data, SignerKeyID, GnupgDir, []).
+
+%%% @doc Create a detached signature with additional options.
+%%%
+%%% Like sign_detached/3 but accepts an options proplist for additional control.
+%%%
+%%% == Options ==
+%%%
+%%% <ul>
+%%%   <li>`{armor, true}' - ASCII-armored output (default, recommended)</li>
+%%%   <li>`{digest_algo, Algo}' - Hash algorithm: "SHA256" (default), "SHA512", etc.</li>
+%%%   <li>`{home_dir, Path}' - Use custom GPG home directory for isolated keyring</li>
+%%% </ul>
+%%%
+%%% == Example ==
+%%%
+%%% ```
+%%% CSRData = <<"-----BEGIN CERTIFICATE REQUEST-----\n...">>,
+%%% Options = [{digest_algo, "SHA512"}],
+%%% {ok, Result} = erl_gpg_api:sign_detached(CSRData, "alice@example.com", "", Options),
+%%% Signature = maps:get(stdout, Result).
+%%% '''
+%%%
+%%% @param Data The data to sign (binary)
+%%% @param SignerKeyID Key identifier (email, key ID, or fingerprint)
+%%% @param GnupgDir GPG home directory (deprecated, use `{home_dir, Path}' option instead)
+%%% @param Options Proplist of options
+%%% @returns `{ok, Result}' where Result contains the detached signature
+%%% @see sign_detached/3
+%%% @end
+-spec sign_detached(binary(), string(), string(), proplists:proplist()) ->
+                       {ok, map()} | {error, term()}.
+sign_detached(Data, SignerKeyID, _GnupgDir, Options)
+    when is_binary(Data), is_list(SignerKeyID) ->
+    start_worker(sign_detached, Data, {SignerKeyID, Options}).
 
 
 %%% @doc List all public keys in the keyring.

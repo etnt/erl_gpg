@@ -194,9 +194,8 @@ do_run(import, KeyData, Opts, Caller) when is_binary(KeyData), is_list(Opts) ->
 do_run(verify, Data, Opts, Caller) when is_binary(Data), is_list(Opts) ->
     Args = base_args([], Opts) ++ ["--verify"],
     run_port(Args, Data, Caller);
-do_run(verify_detached, {Data, Signature}, Opts, Caller) when
-    is_binary(Data), is_binary(Signature), is_list(Opts)
-->
+do_run(verify_detached, {Data, Signature}, Opts, Caller) 
+    when is_binary(Data), is_binary(Signature), is_list(Opts) ->
     %% Write signature to a temporary file since GPG needs file input for detached sigs
     TempSig =
         "/tmp/gpg_sig_" ++
@@ -208,6 +207,16 @@ do_run(verify_detached, {Data, Signature}, Opts, Caller) when
     after
         file:delete(TempSig)
     end;
+do_run(sign, Data, {SignerKeyID, Opts}, Caller) 
+    when is_binary(Data), is_list(SignerKeyID), is_list(Opts) ->
+    %% Create clearsigned message with --clearsign
+    Args = base_args(["--local-user", SignerKeyID], Opts) ++ ["--clearsign", "--armor"],
+    run_port(Args, Data, Caller);
+do_run(sign_detached, Data, {SignerKeyID, Opts}, Caller)
+    when is_binary(Data), is_list(SignerKeyID), is_list(Opts) ->
+    %% Create detached signature with --detach-sign
+    Args = base_args(["--local-user", SignerKeyID], Opts) ++ ["--detach-sign", "--armor"],
+    run_port(Args, Data, Caller);
 do_run(list_keys, _NoData, Opts, Caller) when is_list(Opts) ->
     %% List keys doesn't need input data, use empty binary
     KeyType = proplists:get_value(key_type, Opts, public),
