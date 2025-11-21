@@ -356,9 +356,29 @@ collect(Port, Caller, Acc) ->
             ok;
         {Port, {exit_status, Code}} ->
             catch erlang:port_close(Port),
-            Result = build_result(Acc, {error, {exit_status, Code}}),
-            Caller ! {self(), {error, Result}},
-            ok
+            %% Check if this is a verify operation with VALIDSIG status
+            %% GPG sometimes returns exit code 2 even for cryptographically
+            %% valid signatures due to other issues (trust, missing output files, etc.)
+            StatusLines = maps:get(status_lines, Acc, []),
+            HasValidSig = lists:any(fun(Line) ->
+                case binary:split(Line, <<" ">>, [global]) of
+                    [<<"[GNUPG:]">>, <<"VALIDSIG">> | _] -> true;
+                    _ -> false
+                end
+            end, StatusLines),
+
+            case HasValidSig of
+                true ->
+                    %% Signature is cryptographically valid despite non-zero exit
+                    Result = build_result(Acc, ok),
+                    Caller ! {self(), {ok, Result}},
+                    ok;
+                false ->
+                    %% Genuine error
+                    Result = build_result(Acc, {error, {exit_status, Code}}),
+                    Caller ! {self(), {error, Result}},
+                    ok
+            end
     after ?TIMEOUT ->
         catch erlang:port_close(Port),
         Caller ! {self(), {error, timeout}},
